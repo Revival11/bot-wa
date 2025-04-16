@@ -1,14 +1,15 @@
-// index.js
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
+
+const gameState = new Map(); // userID -> { game: 'tebak', number: 5 }
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true, // tampilkan QR di terminal
+        printQRInTerminal: true,
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -26,16 +27,64 @@ async function startBot() {
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        console.log('Got message:', messages[0]);
+    sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim().toLowerCase();
 
-        if (text === 'ping') {
-            await sock.sendMessage(from, { text: 'pong!' });
+        // Mini Game Logic
+        if (gameState.has(from)) {
+            const session = gameState.get(from);
+
+            // === Tebak Angka ===
+            if (session.game === 'tebak') {
+                const guess = parseInt(text);
+                if (isNaN(guess)) {
+                    await sock.sendMessage(from, { text: 'Masukin angka dong brooo!' });
+                } else if (guess === session.number) {
+                    await sock.sendMessage(from, { text: `Mantap! Jawaban kamu bener (${session.number})` });
+                    gameState.delete(from);
+                } else {
+                    await sock.sendMessage(from, { text: guess < session.number ? 'Kekecilan...' : 'Kebesaran...' });
+                }
+                return;
+            }
+
+            // === Quiz Cepat ===
+            if (session.game === 'quiz') {
+                const jawab = text;
+                if (jawab === session.answer.toLowerCase()) {
+                    await sock.sendMessage(from, { text: 'Bener banget! Kamu pinter!' });
+                    gameState.delete(from);
+                } else {
+                    await sock.sendMessage(from, { text: 'Salah bro, coba lagi!' });
+                }
+                return;
+            }
+        }
+
+        // Menu awal
+        if (text === 'p') {
+            await sock.sendMessage(from, {
+                text: 'Halo!\nAda yang bisa dibantu?\n\nKetik angka berikut untuk main:\n1. Mini game\n2. Informasi lain'
+            });
+        } else if (text === '1') {
+            await sock.sendMessage(from, {
+                text: 'Mini Game:\n\nKetik:\n- `tebak angka` untuk main tebak-tebakan\n- `quiz` buat jawab pertanyaan'
+            });
+        } else if (text === 'tebak angka') {
+            const random = Math.floor(Math.random() * 10) + 1;
+            gameState.set(from, { game: 'tebak', number: random });
+            await sock.sendMessage(from, { text: 'Oke, aku udah pilih angka 1–10, coba tebak!' });
+        } else if (text === 'quiz') {
+            const soal = {
+                question: 'Apa ibu kota Indonesia?',
+                answer: 'Jakarta'
+            };
+            gameState.set(from, { game: 'quiz', answer: soal.answer });
+            await sock.sendMessage(from, { text: `QUIZ: ${soal.question}` });
         }
     });
 }
